@@ -1,0 +1,218 @@
+//=========================================================================
+//======================== PHASE 1: LICKSPOUT =============================
+//=========================================================================
+
+//Mouse receives water via lickspout every 3-5 seconds.
+
+//INITIAL SETUP - USE FOR ALL CODES
+
+  //Include necessary libraries
+    #include <SoftwareSerial.h> //Should be built in
+    #include "Adafruit_Soundboard.h" //Download here: https://github.com/adafruit/Adafruit_Soundboard_library
+    #include <Wire.h>      //Download I2C Library here: https://www.arduino.cc/reference/en/libraries/liquidcrystal-i2c/
+    #include <Servo.h> 
+    
+  //Set up SoundCard/Speaker (Ivan)
+    #define SFX_TX 5
+    #define SFX_RX 6
+    
+    // Connect to the RST pin on the Sound Board
+      #define SFX_RST 4
+    // we'll be using software serial
+      SoftwareSerial ss = SoftwareSerial(SFX_TX, SFX_RX);
+    // pass the software serial to Adafruit_soundboard, the second
+    // argument is the debug port (not used really) and the third 
+    // arg is the reset pin
+      Adafruit_Soundboard sfx = Adafruit_Soundboard(&ss, NULL, SFX_RST);
+    // can also try hardware serial with
+      // Adafruit_Soundboard sfx = Adafruit_Soundboard(&Serial1, NULL, SFX_RST);
+
+  //Assign Pins:
+    int BoxLight = 2; //Enter Box Light Pin
+    int MyServo = 9; //Enter Servo Pin
+    int LickometerLED = 10; //Enter Lickometer built-in LED Pin
+    int LickLED = 11; //Enter Lick LED Pin that separate will light up when mouse licks
+    int Lickometer = 12; //Enter Lickometer Pin
+    int Pump = 13; //Enter Pump Pin
+    int PumpOn = 8; //Enter Pump Pin 1A
+    int PumpKeepLow = 7; //Enter Pump Pin 2A - keep this low
+    int Joystick1 = A1; //input pin 1 from joystick
+    int Joystick3 = A3; //input pin 3 from joystick (the one we care more about)
+
+  //Assign Sounds:
+    int T3kHz="T00     WAV"; //3kHz, 300ms
+    int T5kHz="T01     WAV"; //5kHz, 300ms
+    int T7kHz="T02     WAV"; //7kHz, 300ms
+    int T12kHz="T03     WAV"; //12kHz, 300ms
+    int T14kHz="T04     WAV"; //14kHz, 300ms
+    int T16kHz="T05     WAV"; //16kHz, 300ms
+    int WhiteNoise="T06     WAV"; //White Noise, 3-5 secs?
+
+  //Servo setup:
+    Servo ServoVar;
+
+  //Joystick Sensor Thresholds
+    int Pull=525; //set sensor sensitivity (Ivan uses 525)
+    int Push=475; //set sensor sensitivity (Ivan uses 485)
+    int Joystick1Value; 
+    int Joystick3Value;
+    int ServoBack = 0;
+    int ServoForward = 120;
+
+  //Parameters
+    const long ToneDuration = 300; //NOTE! THIS IS THE DURATION OF THE TONES ON THE SOUND CARD
+    //YOU CAN'T EDIT THIS ONE UNLESS YOU CHANGE LOAD DIFFERENT SOUNDS ONTO CARD.
+    const long ServoDuration = 500; //THIS IS JUST HOW LONG IT TAKES FOR THE SERVO TO RETRACT!
+    //YOU CAN'T EDIT THIS UNLESS YOU GET A DIFFERENT SERVO/CHANGE THE RETRACTION DISTANCE.
+    const long OnDuration = 75; // ON time for pump (105ms, for 4.5uL, 75ms for 2uL)
+    const long MaxTrialDuration = 30000; // Maximum Trial Duration is thirty seconds
+    const long InitialDelay = 10000; // Initial Delay is ten seconds
+    const long InterTrialDelay = 5000; //Inter-trial Delay is five seconds
+    const long TimeOutDelay = 15000; //Delay+timeout after incorrect trials is 15 seconds
+    
+  //Variables
+    unsigned long PreviousMillis = 0; //variable to make snapshot of previous milliseconds
+    unsigned long CurrentMillis; //variable to make snapshot of current milliseconds
+    unsigned long RandSec; //repository for random seconds
+    int Started = 0; //to register that behavior session has started
+    int LickNow = 0; //for sensing lickometer activation
+    int LickCounter = 0; //for clustering serial lickometer activation
+    int TotalLicks = 0; //for counting individual licks
+    int Omissions = 0; //for counting omissions
+    int Incorrects = 0; //for counting incorrect trials
+    unsigned long IncorrectDuration; //for measuring duration after incorrect trials
+    int Incorrected = 0; //temporarily set to 1 if mouse is incorrect
+    unsigned long IncorrectMillis;
+    int Rewards = 0; //number of rewards
+    int Rewarded = 0; //temporarily set to 1 if mouse is rewarded 
+    unsigned long RewardDuration = 0; //for pump
+    unsigned long RewardPeriod = 0; //timing period between choice and reward, sum of tone and on duration of pump
+    unsigned long RewardMillis;
+    int TrialNumber = 0; //for counting trials
+    unsigned long TrialDuration = 0;
+    unsigned long TrialStartTime = 0; //for writing trial start time
+    int TrialDone = 0; //for marking complete trial
+    int CorrectTrialDone = 0; //for marking complete correct trial
+    int IncorrectTrialDone = 0; //for marking complete incorrect/omission trial
+    unsigned long TrialDoneTime = 0; //for writing trial done time
+    int Tripped = 0; //to mark joystick crossing threshold
+    int TrippedPush = 0; //to mark joystick crossing threshold for push
+    int TrippedPull = 0; //to mark joystick crossing threshold for pull
+    int TonePlayed = 0; //to keep track if tone has been played
+    int CorrectTonePlayed = 0;
+    int IncorrectTonePlayed = 0;
+    int LastDirectionRead = 0; //to compute last direction
+    int LastDirection = 0; //records whether mouse pulled (1) or pushed (2), or neutraled (0) on last trial
+    //be careful with lastdirection, it's possible that push and pull will be flipped on some rigs
+    int PumpOpen = 0;
+    int Rand1 = 0;
+
+
+void setup() {
+  // put your setup code here, to run once:
+    Serial.begin(38400);
+
+    //Set up inputs and outputs:
+       pinMode(BoxLight, OUTPUT);
+      pinMode(MyServo, OUTPUT);
+      pinMode(LickLED, OUTPUT);
+      pinMode(Lickometer, INPUT);
+      pinMode(Pump, OUTPUT);
+      pinMode(PumpOn, OUTPUT);
+      pinMode(PumpKeepLow, OUTPUT);
+      pinMode(Joystick1, INPUT);
+      pinMode(Joystick3, INPUT);
+      ServoVar.attach(MyServo);
+      ServoVar.write(ServoBack);
+      digitalWrite(Pump, HIGH);
+      digitalWrite(PumpOn, LOW);
+      digitalWrite(PumpKeepLow, LOW);
+    
+    //Set up random seed (to increase randomness or randomization https://www.arduino.cc/reference/en/language/functions/random-numbers/randomseed/):
+      randomSeed(analogRead(A0));
+}
+
+void loop() {
+  // put your main code here, to run repeatedly:
+
+  //Turn on box light
+     digitalWrite(BoxLight,HIGH); 
+     ServoVar.write(ServoForward); //move lever towards mouse
+
+  CurrentMillis = millis();
+  if(Rand1 == 0)
+    {RandSec = random(3000,5001);
+    Rand1 = 1;}
+
+  //Count and Print Licks
+    LickNow = digitalRead(Lickometer);
+    if(LickNow == 1)
+      {digitalWrite(LickLED,HIGH);}
+      else
+      {digitalWrite(LickLED,LOW);}
+    if(LickNow == 1)
+      {LickCounter++;
+      }
+      else
+        {if(LickCounter >=1)
+          {++TotalLicks;
+          LickCounter=0;
+          Serial.print(millis()); 
+          Serial.print(","); 
+          Serial.print(TrialNumber);
+          Serial.print(",");
+          Serial.print(LastDirection);
+          Serial.print(",");
+          Serial.print(TrialDuration);
+          Serial.print(",");
+          Serial.print(Rewards);
+          Serial.print(",");
+          Serial.print(Omissions);
+          Serial.print(",");
+          Serial.print(Incorrects);
+          Serial.print(",");
+          Serial.println(TotalLicks);}}
+    
+  //Count and Print Rewards      
+    if((CurrentMillis - PreviousMillis) >= RandSec) {
+      RewardMillis = millis();
+      Rewarded = 1;
+      Rewards = ++Rewards;
+      TrialNumber = ++TrialNumber;
+      RandSec = random(3000,5001);
+      Serial.print(millis()); 
+          Serial.print(","); 
+          Serial.print(TrialNumber);
+          Serial.print(",");
+          Serial.print(LastDirection);
+          Serial.print(",");
+          Serial.print(TrialDuration);
+          Serial.print(",");
+          Serial.print(Rewards);
+          Serial.print(",");
+          Serial.print(Omissions);
+          Serial.print(",");
+          Serial.print(Incorrects);
+          Serial.print(",");
+          Serial.println(TotalLicks);
+      PreviousMillis = CurrentMillis;}
+    RewardDuration = millis()-RewardMillis;
+    if(RewardDuration<=OnDuration && Rewarded==1 && PumpOpen !=1)
+       {
+       digitalWrite(Pump, HIGH);
+       digitalWrite(PumpOn,LOW); 
+       digitalWrite(PumpKeepLow, HIGH); //open pump valve
+       digitalWrite(BoxLight,HIGH);
+       PumpOpen = 1;
+       }
+    if(RewardDuration>OnDuration && Rewarded ==1 && PumpOpen ==1) {
+      digitalWrite(Pump,HIGH);
+      digitalWrite(PumpOn,LOW);
+      digitalWrite(PumpKeepLow,LOW); //close pump valve
+      digitalWrite(BoxLight,LOW);
+      PumpOpen = 0;
+      Rewarded = 0;
+    }
+
+      
+}
